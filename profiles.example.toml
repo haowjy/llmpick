@@ -1,0 +1,56 @@
+# What llmpick can serve. Copy this file to profiles.toml and make it yours.
+# To add an engine or a model, edit this file: there is
+# no command for it, and llmpick reads the file on every run.
+#
+# Only facts that cannot be checked go here. Whether an engine is installed,
+# whether files are downloaded and whether a profile is serving are all
+# worked out when llmpick runs, so never record them here.
+#
+# ADD AN ENGINE (a program that serves models). Install it first, then:
+#
+#   [engines.<id>]
+#   name = "..."       shown in lists
+#   version = "..."    shown in lists; kept current by hand
+#   bin = "..."        a command on PATH, or a full path
+#   cwd = "..."        optional: directory to run from
+#   requires = "..."   optional: a path that must exist for the engine to count
+#                      as installed, when bin is generic (python)
+#
+#   The engine must answer GET /health when ready. If it answers elsewhere,
+#   llmpick needs a per-engine health path added in src/runtime.ts first.
+#
+# ADD A MODEL (a profile: an engine, the files it loads, and a port):
+#
+#   [profiles."<id>"]  letters, digits, . _ - only
+#   engine = "<engine id>"
+#   port = 18080       profiles may share a port; one serves at a time
+#   dir = "..."        folder the files live in
+#   repo = "..."       Hugging Face repo, for `llmpick download`; omit if the
+#                      engine fetches its own files
+#   files = { weights = "file.gguf", ... }   names on the left are free
+#   args = [...]       the engine's arguments, one item each. {port} and {dir}
+#                      are replaced with the values above, and {<name>} with
+#                      the full path of that entry in files.
+#   context, note, published, local          optional, display only. Speeds are
+#                      tok/s at 3K / 32K / 100K prompt tokens unless they say
+#                      otherwise; local is what was measured on this machine.
+#
+# Then check it: `llmpick show <id>` prints the resolved command and marks each
+# file present or missing, and reports a mistake in this file as an error.
+# `llmpick download <id>` fetches missing files.
+
+[engines.llamacpp]
+name = "llama.cpp"
+version = "b0000"
+bin = "llama-server"
+
+[profiles."example-q4"]
+engine = "llamacpp"
+port = 8080
+context = "32K"
+note = "Replace repo and file names with a real model."
+dir = "/path/to/models/example"
+repo = "someone/Example-Model-GGUF"
+files = { weights = "example-model-Q4_K_M.gguf" }
+args = ["-m", "{weights}", "-c", "32768", "-ngl", "999", "--host", "127.0.0.1", "--port", "{port}"]
+published = "60 / 55 / 40"

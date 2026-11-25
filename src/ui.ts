@@ -1,0 +1,80 @@
+// Wording and formatting shared by the commands and the dashboard.
+
+import { statSync } from "node:fs";
+import { type ProfileStatus } from "./runtime";
+
+const color = !!process.stdout.isTTY && !process.env.NO_COLOR;
+const sgr = (code: string) => (s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+export const bold = sgr("1");
+export const dim = sgr("2");
+export const red = sgr("31");
+export const green = sgr("32");
+export const yellow = sgr("33");
+
+export const visible = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
+export const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visible(s)));
+
+export const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
+export const mib = (m: number) => `${(m / 1024).toFixed(1)} GB`;
+
+export function ago(epochSeconds: number): string {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - epochSeconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  const h = Math.floor(s / 3600);
+  return h < 48 ? `${h}h ${Math.floor((s % 3600) / 60)}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+/** A profile's marker and one-word standing. */
+export function phase(s: ProfileStatus): { dot: string; label: string } {
+  const u = s.unit;
+  if (u.state === "running") return s.healthy ? { dot: green("●"), label: green("serving") } : { dot: yellow("●"), label: yellow("loading") };
+  if (u.state === "starting" || u.state === "stopping") return { dot: yellow("●"), label: yellow(u.state) };
+  if (u.state === "failed") return { dot: red("✗"), label: red(`crashed${u.exitCode !== null ? ` (exit ${u.exitCode})` : ""}`) };
+  if (!s.bin) return { dot: dim("○"), label: dim("engine missing") };
+  if (s.missing.length) return { dot: dim("○"), label: dim("not downloaded") };
+  return { dot: "○", label: "available" };
+}
+
+/** Where a serving profile's memory is: on the card, in RAM, in swap, and how much of its files the kernel has cached. */
+export function memoryLine(s: ProfileStatus): string {
+  const parts = [s.vram ? `${mib(s.vram)} VRAM` : "", s.unit.ram ? `${gb(s.unit.ram)} RAM` : "", s.unit.swap ? yellow(`${gb(s.unit.swap)} in swap`) : "", s.unit.cache ? dim(`${gb(s.unit.cache)} file cache`) : ""];
+  return parts.filter(Boolean).join("   ");
+}
+
+export const endpoint = (s: ProfileStatus) => `http://127.0.0.1:${s.profile.port}/v1`;
+export const engineLabel = (s: ProfileStatus) => `${s.profile.engine.name} ${s.profile.engine.version}`;
+
+/** The headline speed for a list row: measured here if known, else the published figure, dimmed and marked "pub". */
+export function speed(s: ProfileStatus): string {
+  const p = s.profile;
+  const head = (text: string | undefined) => text?.split("/")[0].trim().replace(/\d+\.\d+/g, (n) => String(Math.round(Number(n)))) ?? "";
+  if (p.local) return `${head(p.local)} tok/s`;
+  return /^[\d-]+$/.test(head(p.published)) ? dim(`${head(p.published)} tok/s pub`) : "";
+}
+
+/** The question to ask before serving a profile, or null when nothing has to stop. */
+export function stopQuestion(id: string, stops: string[]): string | null {
+  if (!stops.length) return null;
+  return stops.length === 1 && stops[0] === id ? `Restart ${id}?` : `Stop ${stops.join(", ")} and start ${id}?`;
+}
+
+/** Everything about one profile, as label and value pairs. */
+export function detail(s: ProfileStatus): [string, string][] {
+  const p = s.profile;
+  const gone = new Set(s.missing);
+  const rows: [string, string][] = [];
+  const add = (label: string, value: string | undefined) => value && rows.push([label, value]);
+  add("engine", `${engineLabel(s)}  ${s.bin ? dim(s.bin) : red(`not installed (${p.engine.requires ?? p.engine.bin})`)}`);
+  add("context", p.context);
+  for (const f of p.files)
+    add(f.key, gone.has(f) ? `${red("✗")} ${f.name} ${red("missing")}` : `${green("✓")} ${f.name} ${dim(gb(statSync(f.path).size))}`);
+  add("folder", p.dir && p.dir + (p.repo ? dim(`  from ${p.repo}`) : ""));
+  add("published", p.published && `${p.published} ${dim("tok/s")}`);
+  add("measured", p.local && `${p.local} ${dim("tok/s here")}`);
+  add("endpoint", endpoint(s));
+  // One option per line: it reads better than a wrapped line and survives a narrow terminal.
+  add("command", [p.engine.bin, ...p.args].map((a) => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" ").replace(/ (?=-)/g, "\n  "));
+  add("note", p.note);
+  return rows;
+}
