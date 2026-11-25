@@ -1,7 +1,8 @@
 // Reads profiles.toml into engines and profiles.
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type Engine = {
   name: string;
@@ -33,10 +34,14 @@ export type Config = { profiles: Profile[] };
 
 export class UserError extends Error {}
 
+/** ~/.config/llmpick/profiles.toml, unless LLMPICK_CONFIG names another file (for trying llmpick against dummy engines). */
+export function configPath(): string {
+  return process.env.LLMPICK_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "llmpick", "profiles.toml");
+}
+
 export function loadConfig(): Config {
-  // LLMPICK_CONFIG points llmpick at another file, for trying it against dummy engines.
-  const path = process.env.LLMPICK_CONFIG ?? join(dirname(realpathSync(import.meta.path)), "..", "profiles.toml");
-  if (!existsSync(path)) throw new UserError(`No profiles file at ${path}. Copy profiles.example.toml there and edit it.`);
+  const path = configPath();
+  if (!existsSync(path)) throw new UserError(`No profiles file at ${path}. Create one with: llmpick init`);
   let raw: any;
   try {
     raw = Bun.TOML.parse(readFileSync(path, "utf8"));

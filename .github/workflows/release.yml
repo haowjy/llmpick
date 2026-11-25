@@ -1,0 +1,43 @@
+# Checks every push and pull request. On main, also publishes a release when
+# package.json names a version that has no release yet: to release, bump the
+# version and push.
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc
+      - name: Build executables
+        run: |
+          bun build src/cli.ts --compile --minify --target=bun-linux-x64-baseline --outfile dist/llmpick-linux-x64
+          bun build src/cli.ts --compile --minify --target=bun-linux-arm64 --outfile dist/llmpick-linux-arm64
+          cd dist && sha256sum llmpick-linux-* > SHA256SUMS
+      - name: Run the executable
+        run: |
+          dist/llmpick-linux-x64 --version
+          XDG_CONFIG_HOME="$RUNNER_TEMP" dist/llmpick-linux-x64 init
+      - name: Release a version that has none yet
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(jq -r .version package.json)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released; bump the version in package.json to release again."
+            exit 0
+          fi
+          gh release create "$tag" dist/llmpick-linux-x64 dist/llmpick-linux-arm64 dist/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "$tag" --generate-notes

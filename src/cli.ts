@@ -1,8 +1,13 @@
 #!/usr/bin/env bun
 // llmpick: choose which local model is served, and see and stop what is.
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { type Config, type Profile, UserError, loadConfig, resolve, search } from "./config";
+import guide from "../AGENTS.md" with { type: "text" };
+import example from "../profiles.example.toml" with { type: "text" };
+import { version } from "../package.json";
+import { type Profile, UserError, configPath, loadConfig, resolve, search } from "./config";
 import { type ProfileStatus, type Snapshot, attach, freeSpace, live, logCommand, plan, serve, snapshot, statusOf, stopAll } from "./runtime";
 import { ago, bold, detail, dim, endpoint, engineLabel, memoryLine, mib, pad, phase, red, speed, stopQuestion, visible } from "./ui";
 
@@ -17,12 +22,15 @@ const HELP = `llmpick: choose which local model is served, and see and stop what
   llmpick ls [terms]          all profiles, or those matching the terms
   llmpick show <profile>      one profile in full: files, speeds, command
   llmpick download <profile>  fetch the profile's missing model files
+  llmpick init                write a starter profiles file to edit
+  llmpick agents              print the guide for coding agents: commands, output, cautions
 
   <profile> is an id, or words that match exactly one profile (llmpick start ink 5.4).
   -y, --yes   do not ask before stopping or downloading
   --json      machine-readable output for status and ls
+  --version   print the version
 
-Profiles are defined in profiles.toml beside this program.`;
+Engines and models are defined in ~/.config/llmpick/profiles.toml.`;
 
 const tty = !!process.stdin.isTTY && !!process.stdout.isTTY;
 
@@ -87,11 +95,21 @@ async function main() {
       follow: { type: "boolean", short: "f", default: false },
       lines: { type: "string", short: "n", default: "60" },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", default: false },
     },
   });
   if (flags.help) return console.log(HELP);
-  const cfg = loadConfig();
+  if (flags.version) return console.log(version);
   const [cmd, ...terms] = positionals;
+  if (cmd === "agents") return console.log(guide);
+  if (cmd === "init") {
+    const path = configPath();
+    if (existsSync(path)) throw new UserError(`${path} already exists; edit it instead.`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, example);
+    return console.log(`Wrote ${path}\nEdit it to describe your engines and models, then run: llmpick ls`);
+  }
+  const cfg = loadConfig();
   // Asks only a person: a script or agent that runs a command means it.
   const confirm = (question: string) => flags.yes || !tty || /^y(es)?$/i.test((prompt(`${question} [y/N]`) ?? "").trim());
 

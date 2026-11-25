@@ -34,22 +34,44 @@ service, shows what is running and where its memory is, and swaps to another whe
 - **Usable by scripts and coding agents.** Every action is a plain subcommand, and `status` and
   `ls` take `--json`.
 
-## Requirements
-
-- Linux with a systemd user session
-- [Bun](https://bun.sh) (developed on 1.4)
-- At least one inference engine that serves HTTP and answers `GET /health` when ready
-- Optional: `nvidia-smi` for GPU readings, and the Hugging Face `hf` CLI for `llmpick download`
-
 ## Install
 
 ```bash
-git clone https://github.com/haowjy/llmpick
-cd llmpick
+curl -fsSL https://raw.githubusercontent.com/haowjy/llmpick/main/install.sh | sh
+llmpick init        # writes ~/.config/llmpick/profiles.toml for you to edit
+```
+
+The installer downloads one self-contained executable for your processor (x86-64 or ARM64)
+from the [latest release](https://github.com/haowjy/llmpick/releases/latest), checks its
+SHA-256, and puts it in `~/.local/bin`. Set `LLMPICK_INSTALL_DIR` to put it elsewhere, or
+`LLMPICK_VERSION=v0.1.0` to pick a release. Run the same line again to update.
+
+You need:
+
+- Linux with a systemd user session
+- at least one inference engine that serves HTTP and answers `GET /health` when ready
+- optional: `nvidia-smi` for GPU readings, and the Hugging Face `hf` CLI for `llmpick download`
+
+To run from source instead, with [Bun](https://bun.sh) (developed on 1.4):
+
+```bash
+git clone https://github.com/haowjy/llmpick && cd llmpick
 bun install
-cp profiles.example.toml profiles.toml     # then edit it
 ln -s "$PWD/src/cli.ts" ~/.local/bin/llmpick
 ```
+
+## Use with a coding agent
+
+Tell your agent:
+
+> Run `llmpick agents` and follow it to manage local models.
+
+That prints the guide for the installed version: which commands to run, how to read the JSON
+output, and what llmpick does without asking. The same text is [AGENTS.md](AGENTS.md) in this
+repository, or
+`https://raw.githubusercontent.com/haowjy/llmpick/main/AGENTS.md` for an agent that has not
+installed llmpick yet. To make it permanent, put that sentence in your own `AGENTS.md` or
+`CLAUDE.md`.
 
 ## Use
 
@@ -63,6 +85,8 @@ llmpick logs [profile]      server output; -f to follow, -n N for N lines
 llmpick ls [terms]          all profiles, or those matching the terms
 llmpick show <profile>      one profile in full: files, speeds, command
 llmpick download <profile>  fetch the profile's missing model files
+llmpick init                write a starter profiles file to edit
+llmpick agents              print the guide for coding agents
 ```
 
 `<profile>` is an id, or words that match exactly one profile. `-y` skips confirmations.
@@ -70,7 +94,7 @@ Quitting the dashboard leaves the server running; `llmpick stop` stops it.
 
 ## Add an engine or a model
 
-Edit `profiles.toml`. The comment at the top of the file lists every field. In short:
+Edit `~/.config/llmpick/profiles.toml`. The comment at the top of the file lists every field. In short:
 
 ```toml
 [engines.llamacpp]
@@ -102,11 +126,7 @@ split from the unit's cgroup. There is no daemon and no state file.
 
 The design and code layout are in [.context/CONTEXT.md](.context/CONTEXT.md).
 
-## For coding agents
-
-Point your agent at [AGENTS.md](AGENTS.md): it covers which commands to run, how to read the
-JSON output, and what llmpick does without asking. [CONTRIBUTING.md](CONTRIBUTING.md) covers
-reporting a problem and changing the code.
+Reporting a problem and changing the code are covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limits
 

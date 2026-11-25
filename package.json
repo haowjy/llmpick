@@ -1,10 +1,13 @@
 {
   "name": "llmpick",
   "description": "Choose which local model is served, and see and stop what is.",
+  "version": "0.1.0",
   "license": "MIT",
   "private": true,
   "type": "module",
-  "bin": { "llmpick": "src/cli.ts" },
+  "bin": {
+    "llmpick": "src/cli.ts"
+  },
   "dependencies": {
     "ink": "^8.0.0",
     "ink-spinner": "^5.0.0",
@@ -13,6 +16,7 @@
   "devDependencies": {
     "@types/bun": "^1.4.5",
     "@types/react": "^19.3.3",
+    "react-devtools-core": "^8.0.0",
     "typescript": "^7.0.2"
   }
 }

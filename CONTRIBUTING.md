@@ -28,7 +28,7 @@ rests on and what each file owns. The rules a change has to keep:
   llmpick can find out by looking.
 - **Keep it small.** Add a field, flag or mode when a real profile or user needs it, and remove
   what a change leaves unused.
-- **Never commit `profiles.toml`** or anything else with machine paths or names.
+- **Never commit your own profiles file** or anything else with machine paths or names.
 
 To check a change:
 
@@ -43,6 +43,13 @@ another profiles file, which lets you try start, switch, crash and stop without 
 model: a dummy engine is any program that listens on the profile's port and answers
 `GET /health` with 200. In the dashboard, check a narrow terminal (60 columns) as well as a wide
 one.
+
+## Release
+
+Bump `version` in `package.json` and push to `main`. The workflow in
+`.github/workflows/release.yml` builds the executables, tags the commit `v<version>` and
+publishes a GitHub release with them. A push that does not change the version releases
+nothing.
 
 Open a pull request with what changed, why, and what you ran to check it. Update
 `.context/CONTEXT.md`, `README.md` and `AGENTS.md` when the change makes them wrong.

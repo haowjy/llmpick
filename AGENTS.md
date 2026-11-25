@@ -3,9 +3,10 @@
 llmpick chooses which local model is served on this machine. Use it to find, start and stop
 local inference servers; do not launch an engine by hand, or llmpick will not see it.
 
-This file covers using llmpick and reading its output. For the design and code layout read
-[.context/CONTEXT.md](.context/CONTEXT.md); to report a problem or change the code read
-[CONTRIBUTING.md](CONTRIBUTING.md).
+This guide covers using llmpick and reading its output. `llmpick agents` prints it for the
+installed version. The design, code layout and how to report a problem or contribute are in
+the repository, <https://github.com/haowjy/llmpick>: `.context/CONTEXT.md` and
+`CONTRIBUTING.md`.
 
 ## Use it
 
@@ -77,6 +78,6 @@ after loading it and is not a problem.
 
 ## Add an engine or a model
 
-Edit `profiles.toml` beside the program. The comment at its top lists every field. Check the
-result with `llmpick show <id>`, which reports mistakes in the file. `profiles.toml` belongs to
-the machine and is not committed.
+Edit `~/.config/llmpick/profiles.toml` (`llmpick init` writes a starter one). The comment at its
+top lists every field. Check the result with `llmpick show <id>`, which reports mistakes in the
+file.

@@ -1,6 +1,6 @@
-# What llmpick can serve. Copy this file to profiles.toml and make it yours.
-# To add an engine or a model, edit this file: there is
-# no command for it, and llmpick reads the file on every run.
+# What llmpick can serve. This is the starter file `llmpick init` writes:
+# replace the example engine and profile with your own. There is no command
+# for adding one, and llmpick reads this file on every run.
 #
 # Only facts that cannot be checked go here. Whether an engine is installed,
 # whether files are downloaded and whether a profile is serving are all

@@ -10,7 +10,7 @@ serving. It is a thin controller: it starts nothing itself and remembers nothing
    after the shell or agent session that started it ends, and sends its output to the journal.
    llmpick has no state file: "what is serving" is always asked of systemd, so it cannot go
    stale. The bash version it replaced kept a PID file, which was wrong within hours.
-2. **`profiles.toml` holds only what cannot be checked.** An engine is a program that serves
+2. **`~/.config/llmpick/profiles.toml` holds only what cannot be checked.** An engine is a program that serves
    models; a profile is one thing to serve (engine, model files, port, arguments). Versions,
    ports and speeds are written there by hand. Whether an engine is installed, files are
    downloaded or a profile is running is worked out on every run.
@@ -87,6 +87,15 @@ dashboard leaves the server running and says so on exit.
   accident.
 - **No daemon of our own.** One would add a single fixed endpoint that swaps models from the
   `model` field of each request. It can be built on `plan` and `serve` if that becomes wanted.
+
+## Distribution
+
+A release is one self-contained executable per processor, built with `bun build --compile`, so
+a user needs neither Bun nor the source. Because the executable has no directory of its own to
+keep files in, the profiles file lives in `~/.config/llmpick/`, and the starter profiles file
+and the agent guide are compiled in (`llmpick init`, `llmpick agents`). Pushing a new `version`
+in `package.json` to `main` makes the workflow tag and publish it; `install.sh` downloads the
+latest release and checks its SHA-256.
 
 ## Known limits
 
