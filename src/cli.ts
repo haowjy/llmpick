@@ -31,7 +31,7 @@ function toJson(snap: Snapshot, s: ProfileStatus) {
   return {
     id: s.profile.id,
     engine: engineLabel(s),
-    state: s.unit.state === "running" ? (s.healthy ? "ready" : "loading") : s.unit.state,
+    state: s.unit.state === "running" ? (s.healthy ? "serving" : "loading") : s.unit.state,
     endpoint: endpoint(s),
     pid: s.unit.pid,
     since: s.unit.since,

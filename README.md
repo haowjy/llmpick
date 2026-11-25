@@ -102,6 +102,12 @@ split from the unit's cgroup. There is no daemon and no state file.
 
 The design and code layout are in [.context/CONTEXT.md](.context/CONTEXT.md).
 
+## For coding agents
+
+Point your agent at [AGENTS.md](AGENTS.md): it covers which commands to run, how to read the
+JSON output, and what llmpick does without asking. [CONTRIBUTING.md](CONTRIBUTING.md) covers
+reporting a problem and changing the code.
+
 ## Limits
 
 - Linux and systemd only.
