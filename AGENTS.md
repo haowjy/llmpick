@@ -42,7 +42,7 @@ Behaviour to rely on:
 ```json
 {
   "serving": [{ "id": "…", "engine": "…", "state": "serving", "endpoint": "http://127.0.0.1:8080/v1",
-                "pid": 1234, "since": 1795641495, "vram_mib": 21296, "cannot_start": null }],
+                "pid": 1234, "since": 1795641495, "vram_mib": 21296 }],
   "crashed": ["…"],
   "gpu": { "used": 21710, "total": 24576, "apps": [{ "pid": 1234, "used": 21296, "name": "…" }] }
 }
@@ -56,19 +56,18 @@ Behaviour to rely on:
 - `gpu.apps` includes programs llmpick did not start. A large entry that is not in `serving`
   means the card is in use by something else.
 
-`llmpick ls --json` is a list of the same per-profile objects, one for every profile.
+`llmpick ls --json` is a list of the same per-profile objects, one for every profile. `state`
+is the same word the text output and the dashboard show:
 
 | `state` | Meaning |
 |---|---|
 | `serving` | Running and answering its health check. Safe to send requests. |
 | `loading` | Running but not answering yet. Wait. |
 | `starting`, `stopping` | systemd is launching or ending it. |
-| `stopped` | Not running. See `cannot_start` for whether it can be started. |
-| `failed` | Its last run crashed. |
-
-`cannot_start` is `null` when `llmpick start` would work, `"not downloaded"` when
-`llmpick download` would fix it, and otherwise the reason, such as an engine that is not
-installed.
+| `available` | Not running; `llmpick start` would work. |
+| `not downloaded` | Model files are missing; `llmpick download` fetches them. |
+| `engine missing` | Its engine is not installed; `llmpick show` names what was looked for. |
+| `crashed` | Its last run exited with an error. It can be started again. |
 
 The plain-text `status` adds a memory line, for example
 `20.8 GB VRAM   0.8 GB RAM   10.3 GB file cache`. VRAM is on the card. RAM is the server's own

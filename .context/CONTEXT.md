@@ -37,16 +37,20 @@ accepted: with one card there is no way to bring up the new one first.
 
 ## Code
 
-About 850 lines of TypeScript run by Bun, in `src/`. Dependencies point one way:
-`cli` and `tui` use `runtime` and `ui`; `ui` uses `runtime`'s types; `runtime` uses `config`.
+TypeScript run by Bun, in `src/`. Dependencies point one way: `cli` and `tui` use `runtime` and
+`ui`; `ui` uses `runtime`; `runtime` uses `config`.
 
-| File | Lines | Owns |
-|---|---:|---|
-| `config.ts` | 120 | Reads and validates `profiles.toml`; fills `{port}`, `{dir}` and `{file}` in arguments; finds a profile from search words. |
-| `runtime.ts` | 232 | Everything that touches the machine: `snapshot` (systemd units, health, GPU, files on disk), `plan`, `serve`, `stopAll`, and the log command. The only file that runs `systemctl`, `systemd-run`, `journalctl`, `nvidia-smi` or `ss`. |
-| `ui.ts` | 80 | Wording shared by both front ends: a profile's state word, its detail rows, the confirmation question, number formats. |
-| `cli.ts` | 163 | Argument parsing and the subcommands; prints text or JSON. |
-| `tui.tsx` | 290 | The dashboard, built with Ink (React for terminals). Polls `snapshot` every 2 seconds. |
+| File | Owns |
+|---|---|
+| `config.ts` | Finds, reads and validates the profiles file; fills `{port}`, `{dir}` and `{file}` in arguments; finds a profile from search words. |
+| `runtime.ts` | Everything that looks at or changes the machine: `snapshot` (systemd units, health, GPU, files on disk), `plan`, `serve`, `stopAll`, and the log command. The only file that runs another program or reads the disk for status. |
+| `ui.ts` | Wording shared by both front ends: a profile's state word, its detail rows, the confirmation question, number formats. It formats a snapshot and looks nothing up itself. |
+| `cli.ts` | Argument parsing and the subcommands; prints text or JSON. Also `init` and `agents`, which write or print files compiled into the executable. |
+| `tui.tsx` | The dashboard, built with Ink (React for terminals). Polls `snapshot` every 2 seconds. |
+
+A profile's state has one vocabulary (`serving`, `loading`, `available`, `not downloaded`,
+`engine missing`, `crashed`), produced by `phase()` in `ui.ts` and used unchanged by the text
+output, the dashboard and `--json`.
 
 One poll costs three processes (`systemctl show` for all units at once, two `nvidia-smi`
 queries) and one HTTP request per running profile.

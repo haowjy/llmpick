@@ -5,7 +5,7 @@
 // a server outlives the shell that started it, its output goes to the
 // journal, and status is correct after a crash or a reboot.
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { type Config, type ModelFile, type Profile, UserError } from "./config";
 
 const unitName = (id: string) => `llmpick-${id}.service`;
@@ -27,7 +27,7 @@ export type ProfileStatus = {
   unit: Unit;
   healthy: boolean;
   bin: string | null; // resolved engine binary, null when not installed
-  missing: ModelFile[];
+  files: (ModelFile & { size: number | null })[]; // size in bytes, null when the file is not there
   vram: number | null; // MiB held by the unit's main process
 };
 
@@ -134,7 +134,7 @@ export async function snapshot(cfg: Config): Promise<Snapshot> {
         unit,
         healthy: unit.state === "running" && (await healthy(profile.port)),
         bin: resolveBin(profile),
-        missing: profile.files.filter((f) => !existsSync(f.path)),
+        files: profile.files.map((f) => ({ ...f, size: statSync(f.path, { throwIfNoEntry: false })?.size ?? null })),
         vram: g?.apps.find((a) => a.pid === unit.pid)?.used ?? null,
       };
     }),
@@ -143,6 +143,7 @@ export async function snapshot(cfg: Config): Promise<Snapshot> {
 }
 
 export const isLive = (s: ProfileStatus) => s.unit.state !== "stopped" && s.unit.state !== "failed";
+export const missing = (s: ProfileStatus) => s.files.filter((f) => f.size === null);
 export const live = (snap: Snapshot) => snap.profiles.filter(isLive);
 export const statusOf = (snap: Snapshot, p: Profile) => snap.profiles.find((s) => s.profile.id === p.id)!;
 
@@ -155,8 +156,8 @@ export type Plan =
 export function plan(snap: Snapshot, s: ProfileStatus): Plan {
   const p = s.profile;
   if (!s.bin) return { kind: "blocked", why: `${p.engine.name} is not installed (looked for ${p.engine.requires ?? p.engine.bin})` };
-  if (s.missing.length) {
-    const names = s.missing.map((f) => f.name);
+  if (missing(s).length) {
+    const names = missing(s).map((f) => f.name);
     return p.repo
       ? { kind: "download", command: ["hf", "download", p.repo, ...names, "--local-dir", p.dir] }
       : { kind: "blocked", why: `${names.join(", ")} missing from ${p.dir}, and the profile has no repo to download from` };

@@ -1,7 +1,6 @@
 // Wording and formatting shared by the commands and the dashboard.
 
-import { statSync } from "node:fs";
-import { type ProfileStatus } from "./runtime";
+import { type ProfileStatus, missing } from "./runtime";
 
 const color = !!process.stdout.isTTY && !process.env.NO_COLOR;
 const sgr = (code: string) => (s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -25,15 +24,18 @@ export function ago(epochSeconds: number): string {
   return h < 48 ? `${h}h ${Math.floor((s % 3600) / 60)}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-/** A profile's marker and one-word standing. */
-export function phase(s: ProfileStatus): { dot: string; label: string } {
+/** A profile's standing: the plain word (also the JSON `state`), and its marker and label as shown. */
+export function phase(s: ProfileStatus): { word: string; dot: string; label: string } {
   const u = s.unit;
-  if (u.state === "running") return s.healthy ? { dot: green("●"), label: green("serving") } : { dot: yellow("●"), label: yellow("loading") };
-  if (u.state === "starting" || u.state === "stopping") return { dot: yellow("●"), label: yellow(u.state) };
-  if (u.state === "failed") return { dot: red("✗"), label: red(`crashed${u.exitCode !== null ? ` (exit ${u.exitCode})` : ""}`) };
-  if (!s.bin) return { dot: dim("○"), label: dim("engine missing") };
-  if (s.missing.length) return { dot: dim("○"), label: dim("not downloaded") };
-  return { dot: "○", label: "available" };
+  const plain = (text: string) => text;
+  const [word, paint, dot]: [string, (text: string) => string, string] =
+    u.state === "running" ? (s.healthy ? ["serving", green, "●"] : ["loading", yellow, "●"])
+    : u.state === "starting" || u.state === "stopping" ? [u.state, yellow, "●"]
+    : u.state === "failed" ? ["crashed", red, "✗"]
+    : !s.bin ? ["engine missing", dim, "○"]
+    : missing(s).length ? ["not downloaded", dim, "○"]
+    : ["available", plain, "○"];
+  return { word, dot: paint(dot), label: paint(u.exitCode === null ? word : `${word} (exit ${u.exitCode})`) };
 }
 
 /** Where a serving profile's memory is: on the card, in RAM, in swap, and how much of its files the kernel has cached. */
@@ -62,13 +64,11 @@ export function stopQuestion(id: string, stops: string[]): string | null {
 /** Everything about one profile, as label and value pairs. */
 export function detail(s: ProfileStatus): [string, string][] {
   const p = s.profile;
-  const gone = new Set(s.missing);
   const rows: [string, string][] = [];
   const add = (label: string, value: string | undefined) => value && rows.push([label, value]);
   add("engine", `${engineLabel(s)}  ${s.bin ? dim(s.bin) : red(`not installed (${p.engine.requires ?? p.engine.bin})`)}`);
   add("context", p.context);
-  for (const f of p.files)
-    add(f.key, gone.has(f) ? `${red("✗")} ${f.name} ${red("missing")}` : `${green("✓")} ${f.name} ${dim(gb(statSync(f.path).size))}`);
+  for (const f of s.files) add(f.key, f.size === null ? `${red("✗")} ${f.name} ${red("missing")}` : `${green("✓")} ${f.name} ${dim(gb(f.size))}`);
   add("folder", p.dir && p.dir + (p.repo ? dim(`  from ${p.repo}`) : ""));
   add("published", p.published && `${p.published} ${dim("tok/s")}`);
   add("measured", p.local && `${p.local} ${dim("tok/s here")}`);

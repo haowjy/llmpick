@@ -34,24 +34,20 @@ Engines and models are defined in ~/.config/llmpick/profiles.toml.`;
 
 const tty = !!process.stdin.isTTY && !!process.stdout.isTTY;
 
-function toJson(snap: Snapshot, s: ProfileStatus) {
-  const todo = plan(snap, s);
-  return {
-    id: s.profile.id,
-    engine: engineLabel(s),
-    state: s.unit.state === "running" ? (s.healthy ? "serving" : "loading") : s.unit.state,
-    endpoint: endpoint(s),
-    pid: s.unit.pid,
-    since: s.unit.since,
-    vram_mib: s.vram,
-    cannot_start: todo.kind === "blocked" ? todo.why : todo.kind === "download" ? "not downloaded" : null,
-  };
-}
+const toJson = (s: ProfileStatus) => ({
+  id: s.profile.id,
+  engine: engineLabel(s),
+  state: phase(s).word,
+  endpoint: endpoint(s),
+  pid: s.unit.pid,
+  since: s.unit.since,
+  vram_mib: s.vram,
+});
 
 function printStatus(snap: Snapshot, json: boolean) {
   const serving = live(snap);
   const crashed = snap.profiles.filter((s) => s.unit.state === "failed");
-  if (json) return console.log(JSON.stringify({ serving: serving.map((s) => toJson(snap, s)), crashed: crashed.map((s) => s.profile.id), gpu: snap.gpu }, null, 2));
+  if (json) return console.log(JSON.stringify({ serving: serving.map(toJson), crashed: crashed.map((s) => s.profile.id), gpu: snap.gpu }, null, 2));
 
   if (!serving.length) console.log(`Nothing is serving. ${dim("Start a profile: llmpick start <profile>   List them: llmpick ls")}`);
   for (const s of serving) {
@@ -74,8 +70,8 @@ function printStatus(snap: Snapshot, json: boolean) {
   }
 }
 
-function printList(snap: Snapshot, list: ProfileStatus[], json: boolean) {
-  if (json) return console.log(JSON.stringify(list.map((s) => toJson(snap, s)), null, 2));
+function printList(list: ProfileStatus[], json: boolean) {
+  if (json) return console.log(JSON.stringify(list.map(toJson), null, 2));
   const idW = Math.max(...list.map((s) => s.profile.id.length));
   const speedW = Math.max(...list.map((s) => visible(speed(s))));
   for (const s of list) console.log(`${phase(s).dot} ${pad(bold(s.profile.id), idW)}  ${pad(phase(s).label, 14)}  ${pad(speed(s), speedW)}  ${dim(engineLabel(s))}`);
@@ -113,13 +109,13 @@ async function main() {
   // Asks only a person: a script or agent that runs a command means it.
   const confirm = (question: string) => flags.yes || !tty || /^y(es)?$/i.test((prompt(`${question} [y/N]`) ?? "").trim());
 
-  async function start(p: Profile) {
+  async function start(p: Profile, sure: boolean) {
     const snap = await snapshot(cfg);
     const todo = plan(snap, statusOf(snap, p));
     if (todo.kind === "blocked") throw new UserError(`Cannot start ${p.id}: ${todo.why}`);
     if (todo.kind === "download") throw new UserError(`${p.id} is not downloaded. Run: llmpick download ${p.id}`);
     const question = stopQuestion(p.id, todo.stops);
-    if (question && !confirm(question)) return;
+    if (question && !sure && !confirm(question)) return;
     let shown = "";
     await serve(cfg, p, (stage) => {
       if (stage !== shown) console.log(dim(stage));
@@ -131,24 +127,23 @@ async function main() {
   switch (cmd) {
     case undefined:
       if (tty) return (await import("./tui")).dashboard(cfg);
-      return printStatus(await snapshot(cfg), flags.json);
+    // Without a terminal there is no dashboard to show.
     case "status":
       return printStatus(await snapshot(cfg), flags.json);
     case "ls": {
       const snap = await snapshot(cfg);
       const hits = search(cfg, terms).map((p) => statusOf(snap, p));
       if (!hits.length) throw new UserError(`No profile matches "${terms.join(" ")}"`);
-      return printList(snap, hits, flags.json);
+      return printList(hits, flags.json);
     }
     case "show":
       return printDetail(statusOf(await snapshot(cfg), resolve(cfg, terms)));
     case "start":
-      return start(resolve(cfg, terms));
+      return start(resolve(cfg, terms), false);
     case "restart": {
       const [serving] = live(await snapshot(cfg));
       if (!serving) throw new UserError("Nothing is serving, so there is nothing to restart");
-      flags.yes = true;
-      return start(serving.profile);
+      return start(serving.profile, true);
     }
     case "stop": {
       const stopped = await stopAll(cfg);

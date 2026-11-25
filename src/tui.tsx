@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 import Spinner from "ink-spinner";
 import { type Config, search } from "./config";
-import { type ProfileStatus, type Snapshot, attach, isLive, live, logCommand, plan, serve, snapshot, stopAll } from "./runtime";
-import { ago, detail, endpoint, engineLabel, memoryLine, mib, pad, phase, speed, stopQuestion, visible } from "./ui";
+import { type ProfileStatus, type Snapshot, attach, isLive, live, logCommand, missing, plan, serve, snapshot, stopAll } from "./runtime";
+import { ago, detail, dim, endpoint, engineLabel, memoryLine, mib, pad, phase, speed, stopQuestion, visible } from "./ui";
 
 type Flash = { text: string; error: boolean };
 type Ask = { text: string; yes: () => void };
@@ -104,10 +104,10 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
     let code = 1;
     away.current = true;
     await suspendTerminal(async () => {
-      console.log(`\x1b[2m${intro}\x1b[0m`);
+      console.log(dim(intro));
       code = await attach(cmd);
       if (pauseAfter) {
-        console.log(`\n\x1b[2m${code === 0 ? "Done" : `Exited with ${code}`}. Press any key to return to llmpick.\x1b[0m`);
+        console.log(dim(`\n${code === 0 ? "Done" : `Exited with ${code}`}. Press any key to return to llmpick.`));
         await attach(["bash", "-c", "read -rsn1"]);
       }
     });
@@ -124,7 +124,7 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
     if (todo.kind === "download") {
       const cmd = todo.command;
       return setAsk({
-        text: `${p.id} is not downloaded. Fetch ${s.missing.length} file${s.missing.length > 1 ? "s" : ""} from ${p.repo}?`,
+        text: `${p.id} is not downloaded. Fetch ${missing(s).length} file${missing(s).length > 1 ? "s" : ""} from ${p.repo}?`,
         yes: async () => {
           const code = await handOff(cmd, `$ ${cmd.join(" ")}`, true);
           say(code === 0 ? `Downloaded ${p.id}. Enter starts it.` : `Download failed (exit ${code}).`, code !== 0);
