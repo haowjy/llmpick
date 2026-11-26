@@ -10,15 +10,16 @@ service, shows what is running and where its memory is, and swaps to another whe
   llmpick                                        GPU ██████████████░░ 21.2 GB of 24.0 GB
 ╭────────────────────────────────────────────────────────────────────────────────────────╮
 │ Serving                                                                                │
-│ ● inkling-5.4   serving for 4m   llamAmpere v0.7.5                                     │
-│   http://127.0.0.1:18080/v1                                                            │
+│ ● inkling-nvfp4q8   serving for 4m   llamAmpere v0.7.5                                 │
+│   http://127.0.0.1:18080/v1   llmpick/local in pi, opencode                            │
 │   20.8 GB VRAM   0.8 GB RAM   10.3 GB file cache                                       │
 ╰────────────────────────────────────────────────────────────────────────────────────────╯
 ╭────────────────────────────────────────────────────────────────────────────────────────╮
 │ Profiles                                                                               │
-│ ❯ ● inkling-5.4       serving          118 tok/s         llamAmpere v0.7.5             │
-│   ○ inkling-4.4       not downloaded   189 tok/s pub     llamAmpere v0.7.5             │
-│   ○ strata-sq20       engine missing   41-70 tok/s pub   Strata latest                 │
+│     profile           tok/s       engine                                               │
+│ ❯ ● inkling-nvfp4q8   118         llamAmpere v0.7.5                                    │
+│   · inkling-ai4       189 pub     llamAmpere v0.7.5                                    │
+│   · inkling-sq20      41-70 pub   Strata latest                                        │
 ╰────────────────────────────────────────────────────────────────────────────────────────╯
 
   ↑↓ move   enter start   s stop   r restart   l logs   i details   / filter   q quit
@@ -48,8 +49,9 @@ SHA-256, and puts it in `~/.local/bin`. Set `LLMPICK_INSTALL_DIR` to put it else
 
 You need:
 
-- Linux with a systemd user session
-- at least one inference engine that serves HTTP and answers `GET /health` when ready
+- Linux with a systemd user session (systemd 244 or later)
+- at least one inference engine that serves HTTP and has a path that answers when it is ready
+  (`GET /health` unless the engine's `health` setting names another)
 - optional: `nvidia-smi` for GPU readings, and the Hugging Face `hf` CLI for `llmpick download`
 
 To run from source instead, with [Bun](https://bun.sh) (developed on 1.4):
@@ -59,6 +61,37 @@ git clone https://github.com/haowjy/llmpick && cd llmpick
 bun install
 ln -s "$PWD/src/cli.ts" ~/.local/bin/llmpick
 ```
+
+## Run a harness on the local model
+
+llmpick keeps one model, `llmpick/local`, in your harness's own config. It always points at
+whatever is serving, so the harness needs no change when you switch models:
+
+```
+llmpick start inkling-nvfp4q8
+pi --model llmpick/local
+opencode -m llmpick/local
+```
+
+Start a different profile and `llmpick/local` is that one. Stop, or let the server crash, and
+the model is removed, so the harness says it is not found instead of calling a dead address.
+`llmpick status` shows which harnesses have it.
+In the harness's model picker the entry is labelled with the profile and its engine, for
+example `inkling-nvfp4q8 <llamAmpere>`.
+
+Harnesses are defined in your profiles file, not in llmpick: each `[harnesses.<name>]` block
+names the config file, where the entry goes in it, and what the entry looks like. The starter
+file from `llmpick init` has blocks for [pi](https://pi.dev) and
+[opencode](https://opencode.ai) (version 2). llmpick edits only the files named there and
+changes only its own entry in them: your other settings and comments are never touched, and
+the entry is added in the file's own indentation. A file it cannot read as JSON is left alone and named in a warning. Delete a block and
+that harness is left alone; add one to support another harness that keeps its models in a
+JSON file.
+
+**Upgrading from 0.2.0:** your profiles file has no harness blocks, so nothing is connected
+until you add them. Copy the `[harnesses.…]` blocks from
+[profiles.example.toml](profiles.example.toml) into `~/.config/llmpick/profiles.toml`, then
+restart the model that is serving so its unit gets the stop hook.
 
 ## Use with a coding agent
 
@@ -87,6 +120,7 @@ llmpick show <profile>      one profile in full: files, speeds, command
 llmpick download <profile>  fetch the profile's missing model files
 llmpick init                write a starter profiles file to edit
 llmpick agents              print the guide for coding agents
+llmpick sync                point harnesses at what is serving (llmpick does this itself)
 ```
 
 `<profile>` is an id, or words that match exactly one profile. `-y` skips confirmations.
@@ -120,7 +154,7 @@ downloaded, or a profile is serving is worked out on every run.
 ## How it works
 
 `llmpick start` runs the engine with `systemd-run --user` as the unit `llmpick-<id>.service`,
-then polls the unit and `GET /health` until the server answers. Status comes from
+then polls the unit and the engine's health path until the server answers. Status comes from
 `systemctl --user show`, logs from the journal, GPU figures from `nvidia-smi`, and the memory
 split from the unit's cgroup. There is no daemon and no state file.
 
@@ -131,7 +165,6 @@ Reporting a problem and changing the code are covered in [CONTRIBUTING.md](CONTR
 ## Limits
 
 - Linux and systemd only.
-- The health check is `GET /health` for every engine.
 - Downloads come from Hugging Face only. Put files from elsewhere in the profile's `dir` yourself.
 - There are no automated tests yet.
 

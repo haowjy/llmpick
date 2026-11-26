@@ -8,8 +8,8 @@ import guide from "../AGENTS.md" with { type: "text" };
 import example from "../profiles.example.toml" with { type: "text" };
 import { version } from "../package.json";
 import { type Profile, UserError, configPath, loadConfig, resolve, search } from "./config";
-import { type ProfileStatus, type Snapshot, attach, freeSpace, live, logCommand, plan, serve, snapshot, statusOf, stopAll } from "./runtime";
-import { ago, bold, detail, dim, endpoint, engineLabel, memoryLine, mib, pad, phase, red, speed, stopQuestion, visible } from "./ui";
+import { type ProfileStatus, type Snapshot, attach, endpoint, freeSpace, live, logCommand, plan, serve, snapshot, statusOf, stopAll, sync } from "./runtime";
+import { COLUMNS, ago, bold, detail, dim, engineLabel, harnessLine, memoryLine, mib, pad, phase, red, speed, stopQuestion, visible } from "./ui";
 
 const HELP = `llmpick: choose which local model is served, and see and stop what is.
 
@@ -24,6 +24,7 @@ const HELP = `llmpick: choose which local model is served, and see and stop what
   llmpick download <profile>  fetch the profile's missing model files
   llmpick init                write a starter profiles file to edit
   llmpick agents              print the guide for coding agents: commands, output, cautions
+  llmpick sync                point harnesses at what is serving (llmpick does this itself)
 
   <profile> is an id, or words that match exactly one profile (llmpick start ink 5.4).
   -y, --yes   do not ask before stopping or downloading
@@ -38,22 +39,29 @@ const toJson = (s: ProfileStatus) => ({
   id: s.profile.id,
   engine: engineLabel(s),
   state: phase(s).word,
-  endpoint: endpoint(s),
+  endpoint: endpoint(s.profile),
   pid: s.unit.pid,
   since: s.unit.since,
   vram_mib: s.vram,
+  harnesses: s.harnesses.map((h) => ({ name: h.name, model: h.model })),
 });
+
+/** A harness config llmpick could not update is worth saying, and no reason to fail the command. */
+const warn = (problems: string[]) => problems.forEach((m) => console.error(`Harness not updated: ${m}`));
 
 function printStatus(snap: Snapshot, json: boolean) {
   const serving = live(snap);
   const crashed = snap.profiles.filter((s) => s.unit.state === "failed");
-  if (json) return console.log(JSON.stringify({ serving: serving.map(toJson), crashed: crashed.map((s) => s.profile.id), gpu: snap.gpu }, null, 2));
+  if (json)
+    return console.log(JSON.stringify({ serving: serving.map(toJson), crashed: crashed.map((s) => s.profile.id), gpu: snap.gpu, problems: snap.problems }, null, 2));
+  warn(snap.problems);
 
   if (!serving.length) console.log(`Nothing is serving. ${dim("Start a profile: llmpick start <profile>   List them: llmpick ls")}`);
   for (const s of serving) {
     const ph = phase(s);
     console.log(`${ph.dot} ${bold(s.profile.id)}  ${ph.label}${s.unit.since ? ` for ${ago(s.unit.since)}` : ""}`);
-    console.log(`  endpoint  ${endpoint(s)}`);
+    console.log(`  endpoint  ${endpoint(s.profile)}`);
+    if (harnessLine(s)) console.log(`  model     ${harnessLine(s)}`);
     console.log(`  engine    ${engineLabel(s)}`);
     console.log(`  process   pid ${s.unit.pid}`);
     console.log(`  memory    ${memoryLine(s)}`);
@@ -72,13 +80,14 @@ function printStatus(snap: Snapshot, json: boolean) {
 
 function printList(list: ProfileStatus[], json: boolean) {
   if (json) return console.log(JSON.stringify(list.map(toJson), null, 2));
-  const idW = Math.max(...list.map((s) => s.profile.id.length));
-  const speedW = Math.max(...list.map((s) => visible(speed(s))));
+  const idW = Math.max(COLUMNS.id.length, ...list.map((s) => s.profile.id.length));
+  const speedW = Math.max(COLUMNS.speed.length, ...list.map((s) => visible(speed(s))));
+  console.log(dim(`  ${pad(COLUMNS.id, idW)}  ${pad(COLUMNS.state, 14)}  ${pad(COLUMNS.speed, speedW)}  ${COLUMNS.engine}`));
   for (const s of list) console.log(`${phase(s).dot} ${pad(bold(s.profile.id), idW)}  ${pad(phase(s).label, 14)}  ${pad(speed(s), speedW)}  ${dim(engineLabel(s))}`);
 }
 
 function printDetail(s: ProfileStatus) {
-  console.log(`${phase(s).dot} ${bold(s.profile.id)}  ${phase(s).label}`);
+  console.log(`${phase(s).dot} ${bold(s.profile.id)}`);
   for (const [k, v] of detail(s)) console.log(`  ${pad(dim(k), 10)} ${v.replaceAll("\n", "\n" + " ".repeat(13))}`);
 }
 
@@ -117,11 +126,11 @@ async function main() {
     const question = stopQuestion(p.id, todo.stops);
     if (question && !sure && !confirm(question)) return;
     let shown = "";
-    await serve(cfg, p, (stage) => {
+    const problems = await serve(cfg, p, (stage) => {
       if (stage !== shown) console.log(dim(stage));
       shown = stage;
     });
-    printStatus(await snapshot(cfg), flags.json);
+    printStatus({ ...(await snapshot(cfg)), problems }, flags.json);
   }
 
   switch (cmd) {
@@ -129,7 +138,12 @@ async function main() {
       if (tty) return (await import("./tui")).dashboard(cfg);
     // Without a terminal there is no dashboard to show.
     case "status":
-      return printStatus(await snapshot(cfg), flags.json);
+      return printStatus(await sync(cfg), flags.json);
+    case "sync": {
+      const { problems } = await sync(cfg);
+      if (problems.length) throw new UserError(problems.map((m) => `Harness not updated: ${m}`).join("\n"));
+      return;
+    }
     case "ls": {
       const snap = await snapshot(cfg);
       const hits = search(cfg, terms).map((p) => statusOf(snap, p));
@@ -146,8 +160,9 @@ async function main() {
       return start(serving.profile, true);
     }
     case "stop": {
-      const stopped = await stopAll(cfg);
-      return console.log(stopped.length ? `Stopped ${stopped.join(", ")}.` : "Nothing is serving.");
+      const { stopped, problems } = await stopAll(cfg);
+      console.log(stopped.length ? `Stopped ${stopped.join(", ")}.` : "Nothing is serving.");
+      return warn(problems);
     }
     case "logs": {
       const id = terms.length ? resolve(cfg, terms).id : live(await snapshot(cfg))[0]?.profile.id;

@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 import Spinner from "ink-spinner";
 import { type Config, search } from "./config";
-import { type ProfileStatus, type Snapshot, attach, isLive, live, logCommand, missing, plan, serve, snapshot, stopAll } from "./runtime";
-import { ago, detail, dim, endpoint, engineLabel, memoryLine, mib, pad, phase, speed, stopQuestion, visible } from "./ui";
+import { type ProfileStatus, type Snapshot, attach, endpoint, isLive, live, logCommand, missing, plan, serve, snapshot, stopAll, sync } from "./runtime";
+import { COLUMNS, ago, detail, dim, engineLabel, harnessLine, memoryLine, mib, pad, phase, speed, stopQuestion, visible } from "./ui";
 
 type Flash = { text: string; error: boolean };
 type Ask = { text: string; yes: () => void };
@@ -58,7 +58,7 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [flash, setFlash] = useState<Flash | null>(null);
+  const [flash, setFlash] = useState<Flash | null>(first.problems.length ? { text: `Harness not updated: ${first.problems[0]}`, error: true } : null);
   const [ask, setAsk] = useState<Ask | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const working = useRef(false);
@@ -81,6 +81,8 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
   const todo = cur && plan(snap, cur);
 
   const say = (text: string, error = false) => setFlash({ text: text.split("\n")[0], error });
+  /** How an action ended: its message, or the harness config that could not follow it. The panels already show that it worked. */
+  const ended = (text: string, problems: string[]) => (problems.length ? void say(`Harness not updated: ${problems[0]}`, true) : text);
 
   /** Runs one action at a time, showing progress, then reports how it ended. */
   async function act(label: string, fn: () => Promise<string | void>) {
@@ -133,8 +135,8 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
     }
     const go = () =>
       act(`starting ${p.id}`, async () => {
-        await serve(cfg, p, (stage, detail) => setBusy(detail ? `${stage} · ${detail}` : stage));
-        return `${p.id} is ready at ${endpoint(s)}`;
+        const problems = await serve(cfg, p, (stage, detail) => setBusy(detail ? `${stage} · ${detail}` : stage));
+        return ended(`${p.id} is ready at ${endpoint(s.profile)}.`, problems);
       });
     const question = stopQuestion(p.id, todo.stops);
     if (question) setAsk({ text: question, yes: go });
@@ -144,7 +146,11 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
   function stopServing() {
     if (!serving.length) return say("Nothing is serving.");
     const names = serving.map((s) => s.profile.id).join(", ");
-    setAsk({ text: `Stop ${names}?`, yes: () => act(`stopping ${names}`, async () => `Stopped ${(await stopAll(cfg)).join(", ")}.`) });
+    const stop = async () => {
+      const { stopped, problems } = await stopAll(cfg);
+      return ended(`Stopped ${stopped.join(", ")}.`, problems);
+    };
+    setAsk({ text: `Stop ${names}?`, yes: () => act(`stopping ${names}`, stop) });
   }
 
   function move(by: number) {
@@ -184,16 +190,24 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
     if (input === "l" && cur) handOff(logCommand(cur.profile.id, 200, true), `Output of ${cur.profile.id}. Ctrl-C returns to llmpick.`, false);
   });
 
-  const idW = Math.max(...snap.profiles.map((s) => s.profile.id.length));
+  const idW = Math.max(COLUMNS.id.length, ...snap.profiles.map((s) => s.profile.id.length));
   const width = Math.min(columns, 120);
-  // Columns are as wide as their longest value. One that does not fit is shortened or left out, never cut:
-  // the engine loses its version first, then goes; the speed goes last.
-  const widest = (text: (s: ProfileStatus) => string) => Math.max(...snap.profiles.map((s) => visible(text(s))));
-  const stateW = widest((s) => phase(s).label);
-  const speedW = widest(speed);
-  const room = width - 4 - (4 + idW + 3 + stateW);
-  const showSpeed = room >= 3 + speedW;
-  const engine = [engineLabel, (s: ProfileStatus) => s.profile.engine.name].find((text) => room >= 3 + speedW + 3 + widest(text));
+  // The list shows no state word: the marker and a dimmed row carry it, and details spell it out.
+  // After the id come these columns, most important first. Each is as wide as its longest value and may have a
+  // shorter form; one that still does not fit is left out with everything after it, so nothing is cut mid-word.
+  const optional: { label: string; forms: ((s: ProfileStatus) => string)[]; dim?: true }[] = [
+    { label: COLUMNS.speed, forms: [speed] },
+    { label: COLUMNS.engine, forms: [engineLabel, (s) => s.profile.engine.name], dim: true },
+  ];
+  const shown: { label: string; text: (s: ProfileStatus) => string; w: number; dim?: true }[] = [];
+  let room = width - 4 - (4 + idW);
+  for (const c of optional) {
+    if (snap.profiles.every((s) => !c.forms[0](s))) continue; // nothing to show under this label
+    const fit = c.forms.map((text) => ({ text, w: Math.max(c.label.length, ...snap.profiles.map((s) => visible(text(s)))) })).find((f) => room >= 3 + f.w);
+    if (!fit) break;
+    shown.push({ label: c.label, dim: c.dim, ...fit });
+    room -= 3 + fit.w;
+  }
   const startable = !!cur && !isLive(cur) && todo?.kind !== "blocked";
 
   return (
@@ -213,7 +227,7 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
                 {phase(s).dot} <Text bold>{s.profile.id}</Text>{"   "}{phase(s).label}
                 <Text dimColor>{s.unit.since ? ` for ${ago(s.unit.since)}` : ""}{"   "}{engineLabel(s)}</Text>
               </Text>
-              <Text wrap="truncate-end">{"  "}{endpoint(s)}</Text>
+              <Text wrap="truncate-end">{"  "}{endpoint(s.profile)}{"   "}{harnessLine(s)}</Text>
               <Text wrap="truncate-end">{"  "}{memoryLine(s)}</Text>
             </Box>
           ))}
@@ -221,7 +235,7 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
       </Panel>
 
       {detailOpen && cur ? (
-        <Panel title={cur.profile.id} right={phase(cur).label} clip>
+        <Panel title={cur.profile.id} clip>
           {detail(cur).map(([k, v]) => (
             <Box key={k} flexShrink={0}>
               <Box width={10} flexShrink={0}><Text dimColor>{k}</Text></Box>
@@ -232,14 +246,15 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
       ) : (
         <Panel title="Profiles" right={filtering ? `/${filter}▏` : filter ? `/${filter}` : ""}>
           {!list.length ? <Text dimColor>No profile matches.</Text> : null}
+          <Text dimColor wrap="truncate-end">
+            {"    "}{pad(COLUMNS.id, idW)}{shown.map((c) => `   ${pad(c.label, c.w)}`).join("")}
+          </Text>
           {list.map((s) => {
             const on = s === cur;
             return (
-              <Text key={s.profile.id} wrap="truncate-end">
-                <Text color="cyan">{on ? "❯" : " "}</Text> {phase(s).dot} <Text bold={on}>{pad(s.profile.id, idW)}</Text>{"   "}
-                {pad(phase(s).label, stateW)}
-                {showSpeed ? `   ${pad(speed(s), speedW)}` : ""}
-                <Text dimColor>{engine ? `   ${engine(s)}` : ""}</Text>
+              <Text key={s.profile.id} wrap="truncate-end" dimColor={phase(s).faint}>
+                <Text color="cyan">{on ? "❯" : " "}</Text> {phase(s).dot} <Text bold={on}>{pad(s.profile.id, idW)}</Text>
+                {shown.map((c) => <Text key={c.label} dimColor={c.dim}>{`   ${pad(c.text(s), c.w)}`}</Text>)}
               </Text>
             );
           })}
@@ -273,9 +288,9 @@ function App({ cfg, first }: { cfg: Config; first: Snapshot }) {
 }
 
 export async function dashboard(cfg: Config): Promise<void> {
-  const app = render(<App cfg={cfg} first={await snapshot(cfg)} />, { alternateScreen: true });
+  const app = render(<App cfg={cfg} first={await sync(cfg)} />, { alternateScreen: true });
   await app.waitUntilExit();
   // Quitting the dashboard leaves the server running; say so.
   for (const s of live(await snapshot(cfg)))
-    console.log(`${s.profile.id} is still serving at ${endpoint(s)}. Stop it with: llmpick stop`);
+    console.log(`${s.profile.id} is still serving at ${endpoint(s.profile)}. Stop it with: llmpick stop`);
 }

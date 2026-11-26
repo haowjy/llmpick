@@ -6,11 +6,19 @@
 // journal, and status is correct after a crash or a reboot.
 
 import { existsSync, statSync } from "node:fs";
-import { type Config, type ModelFile, type Profile, UserError } from "./config";
+import { type Config, type Harness, type ModelFile, type Profile, type Served, UserError } from "./config";
+import { connect, connected, variables } from "./harness";
 
 const unitName = (id: string) => `llmpick-${id}.service`;
-const HEALTH = "/health";
 const READY_TIMEOUT_SECONDS = 900;
+/** How to run llmpick again: the compiled executable alone, or bun and this source. */
+const SELF = Bun.main.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, Bun.main];
+/**
+ * One word of a systemd command line, so a path with a space in it arrives whole. The line is
+ * given the ":" prefix, which turns off $VARIABLE substitution, and a property set through
+ * systemd-run has no % specifiers, so only the quote and the backslash need escaping.
+ */
+const word = (a: string) => `"${a.replace(/[\\"]/g, "\\$&")}"`;
 
 export type Unit = {
   state: "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -29,6 +37,7 @@ export type ProfileStatus = {
   bin: string | null; // resolved engine binary, null when not installed
   files: (ModelFile & { size: number | null })[]; // size in bytes, null when the file is not there
   vram: number | null; // MiB held by the unit's main process
+  harnesses: Harness[]; // harnesses whose entry points at this profile now
 };
 
 export type Gpu = {
@@ -37,7 +46,12 @@ export type Gpu = {
   apps: { pid: number; used: number; name: string }[];
 };
 
-export type Snapshot = { profiles: ProfileStatus[]; gpu: Gpu | null };
+export type Snapshot = {
+  profiles: ProfileStatus[];
+  gpu: Gpu | null;
+  /** Harness configs `sync` could not bring in line, one line each. Empty from a plain `snapshot`. */
+  problems: string[];
+};
 
 async function run(cmd: string[]): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(cmd, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -100,9 +114,9 @@ async function units(ids: string[]): Promise<Map<string, Unit>> {
   return new Map(ids.map((id) => [id, found.get(unitName(id))!]));
 }
 
-async function healthy(port: number): Promise<boolean> {
+async function healthy(p: Profile): Promise<boolean> {
   try {
-    return (await fetch(`http://127.0.0.1:${port}${HEALTH}`, { signal: AbortSignal.timeout(1000) })).ok;
+    return (await fetch(`http://127.0.0.1:${p.port}${p.engine.health}`, { signal: AbortSignal.timeout(1000) })).ok;
   } catch {
     return false; // nothing listening yet
   }
@@ -132,14 +146,51 @@ export async function snapshot(cfg: Config): Promise<Snapshot> {
       return {
         profile,
         unit,
-        healthy: unit.state === "running" && (await healthy(profile.port)),
+        healthy: unit.state === "running" && (await healthy(profile)),
         bin: resolveBin(profile),
         files: profile.files.map((f) => ({ ...f, size: statSync(f.path, { throwIfNoEntry: false })?.size ?? null })),
         vram: g?.apps.find((a) => a.pid === unit.pid)?.used ?? null,
+        harnesses: unit.state === "running" ? connected(cfg.harnesses, endpoint(profile)) : [],
       };
     }),
   );
-  return { profiles, gpu: g };
+  return { profiles, gpu: g, problems: [] };
+}
+
+export const endpoint = (p: Profile) => `http://127.0.0.1:${p.port}/v1`;
+
+/**
+ * What a harness needs to know about a serving profile. The server is asked,
+ * since profiles.toml does not record it. Null when the server does not
+ * answer; an engine that answers without these facts leaves them unknown.
+ */
+async function served(p: Profile): Promise<Served | null> {
+  const res = await fetch(`${endpoint(p)}/models`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (!res) return null;
+  const model = res.ok ? (await res.json().catch(() => null))?.data?.[0] : undefined; // not a model list: nothing is known
+  return {
+    id: p.id,
+    engine: p.engine.name,
+    url: endpoint(p),
+    context: Number.isInteger(model?.meta?.n_ctx) ? model.meta.n_ctx : null,
+    inputs: model?.architecture?.input_modalities?.includes("image") ? ["text", "image"] : ["text"],
+  };
+}
+
+/**
+ * A snapshot, after making the harness configs match it: the entry describes
+ * what is serving and is gone when nothing is. `serve` writes the entry
+ * itself; this is for when it cannot, which is a server that ended (the
+ * unit's stop hook), a power cut that skipped the hook, and a harness
+ * installed after the server started.
+ */
+export async function sync(cfg: Config): Promise<Snapshot> {
+  const snap = await snapshot(cfg);
+  const s = snap.profiles.find((x) => x.unit.state === "running");
+  const target = s?.healthy ? await served(s.profile) : null;
+  if (s && !target) return snap; // running but not answering: loading or busy, so its entry stays as it is
+  const { changed, problems } = connect(cfg.harnesses, target);
+  return { ...(changed ? await snapshot(cfg) : snap), problems };
 }
 
 export const isLive = (s: ProfileStatus) => s.unit.state !== "stopped" && s.unit.state !== "failed";
@@ -166,10 +217,11 @@ export function plan(snap: Snapshot, s: ProfileStatus): Plan {
 }
 
 /** Stops everything llmpick is serving and returns the ids it stopped. */
-export async function stopAll(cfg: Config): Promise<string[]> {
-  const ids = live(await snapshot(cfg)).map((s) => s.profile.id);
-  for (const id of ids) await systemctl("stop", unitName(id));
-  return ids;
+export async function stopAll(cfg: Config): Promise<{ stopped: string[]; problems: string[] }> {
+  const stopped = live(await snapshot(cfg)).map((s) => s.profile.id);
+  for (const id of stopped) await systemctl("stop", unitName(id));
+  // The unit's stop hook has synced already, unless an older llmpick started the unit or the hook's path has gone.
+  return { stopped, problems: (await sync(cfg)).problems };
 }
 
 export function logCommand(id: string, lines: number, follow: boolean): string[] {
@@ -189,8 +241,10 @@ async function portHolder(port: number): Promise<string | null> {
  * Serves this profile and nothing else: stops whatever llmpick is serving
  * (the card holds one model at a time), starts the profile, and returns once
  * it answers its health check. Throws if it cannot start or exits first.
+ * Returns the harness configs it could not point at the new server, which is
+ * no reason to call the start a failure.
  */
-export async function serve(cfg: Config, p: Profile, onStage: (stage: string, detail: string) => void): Promise<void> {
+export async function serve(cfg: Config, p: Profile, onStage: (stage: string, detail: string) => void): Promise<string[]> {
   const snap = await snapshot(cfg);
   const s = statusOf(snap, p);
   const todo = plan(snap, s);
@@ -209,7 +263,12 @@ export async function serve(cfg: Config, p: Profile, onStage: (stage: string, de
   const started = await run([
     "systemd-run", "--user", "--quiet", `--unit=${unit}`,
     `--description=llmpick ${p.id} (${p.engine.name} ${p.engine.version})`,
-    `--setenv=PATH=${process.env.PATH ?? ""}`,
+    // The stop hook has to find the same files this run did, so it gets the variables they are found through.
+    ...["PATH", "XDG_CONFIG_HOME", "LLMPICK_CONFIG", ...variables(cfg.harnesses)]
+      .filter((k) => process.env[k] !== undefined)
+      .map((k) => `--setenv=${k}=${process.env[k]}`),
+    // Runs however the server ends, a crash included, so harnesses stop being offered a dead model.
+    `--property=ExecStopPost=-:${[...SELF, "sync"].map(word).join(" ")}`,
     ...(p.engine.cwd ? [`--working-directory=${p.engine.cwd}`] : []),
     "--", s.bin!, ...p.args,
   ]);
@@ -219,9 +278,10 @@ export async function serve(cfg: Config, p: Profile, onStage: (stage: string, de
     const u = (await units([p.id])).get(p.id)!;
     if (u.state === "failed" || u.state === "stopped")
       throw new Error(`${p.id} exited while starting${u.exitCode !== null ? ` (exit ${u.exitCode})` : ""}. Last output:\n${await logTail(p.id, 15)}`);
-    if (await healthy(p.port)) return;
+    const ready = (await healthy(p)) && (await served(p));
+    if (ready) return connect(cfg.harnesses, ready).problems;
     if (seconds > READY_TIMEOUT_SECONDS)
-      throw new Error(`${p.id} is running but has not answered ${HEALTH} after ${READY_TIMEOUT_SECONDS}s. See: llmpick logs ${p.id}`);
+      throw new Error(`${p.id} is running but has not answered ${p.engine.health} after ${READY_TIMEOUT_SECONDS}s. See: llmpick logs ${p.id}`);
     onStage(`loading ${p.id}`, `${seconds}s  ${(await logTail(p.id, 1)).slice(0, 200)}`);
     await Bun.sleep(1000);
   }

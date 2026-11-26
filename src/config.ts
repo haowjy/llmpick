@@ -1,8 +1,9 @@
-// Reads profiles.toml into engines and profiles.
+// Reads profiles.toml into engines, profiles and harnesses.
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fill, names } from "./template";
 
 export type Engine = {
   name: string;
@@ -12,6 +13,8 @@ export type Engine = {
   cwd?: string;
   /** A path that must exist for the engine to count as installed, when `bin` alone cannot tell. */
   requires?: string;
+  /** The path that answers once the server can take requests. */
+  health: string;
 };
 
 export type ModelFile = { key: string; name: string; path: string };
@@ -30,7 +33,26 @@ export type Profile = {
   local?: string;
 };
 
-export type Config = { profiles: Profile[] };
+/** What a harness entry may say about the model being served, written {name} in the entry. `context` is null when the server does not say. */
+export type Served = { id: string; engine: string; url: string; context: number | null; inputs: string[] };
+const SERVED = ["id", "engine", "url", "context", "inputs"] satisfies (keyof Served)[];
+
+/** A coding harness whose config llmpick keeps pointed at what is serving. */
+export type Harness = {
+  name: string;
+  /** Folders its config may be in; the first whose $VARIABLES are all set is the one. The harness is skipped if it does not exist. */
+  dir: string[];
+  /** Config file names in that folder; the first that exists is edited, else the first is created. */
+  files: string[];
+  /** Where llmpick's entry sits in that JSON file. */
+  at: string[];
+  /** What the harness calls the model, for people and scripts to type. */
+  model: string;
+  /** The entry, with {name} where a fact about the served model goes. */
+  entry: object;
+};
+
+export type Config = { profiles: Profile[]; harnesses: Harness[] };
 
 export class UserError extends Error {}
 
@@ -55,7 +77,7 @@ export function loadConfig(): Config {
   const engines = new Map<string, Engine>();
   for (const [id, e] of Object.entries<any>(raw.engines ?? {})) {
     if (typeof e.bin !== "string") bad(`engines.${id}`, "needs `bin`");
-    engines.set(id, { name: e.name ?? id, version: e.version ?? "", bin: e.bin, cwd: e.cwd, requires: e.requires });
+    engines.set(id, { name: e.name ?? id, version: e.version ?? "", bin: e.bin, cwd: e.cwd, requires: e.requires, health: e.health ?? "/health" });
   }
 
   const profiles: Profile[] = [];
@@ -75,11 +97,8 @@ export function loadConfig(): Config {
     if (files.length && !dir) bad(where, "lists `files` but has no `dir`");
     const values: Record<string, string> = { port: String(p.port), dir };
     for (const f of files) values[f.key] = f.path;
-    const args = p.args.map((a: unknown) =>
-      String(a).replace(/\{([A-Za-z0-9_-]+)\}/g, (_, k: string) =>
-        k in values ? values[k] : bad(where, `uses {${k}} in args, which is not port, dir or a file name`),
-      ),
-    );
+    for (const k of names(p.args)) if (!Object.hasOwn(values, k)) bad(where, `uses {${k}} in args, which is not port, dir or a file name`);
+    const args: string[] = fill(p.args.map(String), values);
     profiles.push({
       id,
       engine,
@@ -95,7 +114,17 @@ export function loadConfig(): Config {
     });
   }
   if (!profiles.length) throw new UserError(`${path} defines no profiles`);
-  return { profiles };
+
+  const strings = (v: unknown) => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string");
+  const harnesses = Object.entries<any>(raw.harnesses ?? {}).map(([name, h]): Harness => {
+    const where = `harnesses.${name}`;
+    for (const k of ["dir", "files", "at"]) if (!strings(h[k])) bad(where, `needs \`${k}\` as a list of strings`);
+    if (typeof h.model !== "string") bad(where, "needs `model`, the name the harness calls the model");
+    if (typeof h.entry !== "object" || h.entry === null) bad(where, "needs an `entry` table");
+    for (const k of names(h.entry)) if (!(SERVED as string[]).includes(k)) bad(where, `uses {${k}} in entry, which is not one of ${SERVED.join(", ")}`);
+    return { name, dir: h.dir, files: h.files, at: h.at, model: h.model, entry: h.entry };
+  });
+  return { profiles, harnesses };
 }
 
 function haystack(p: Profile): string {

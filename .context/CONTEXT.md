@@ -18,6 +18,56 @@ serving. It is a thin controller: it starts nothing itself and remembers nothing
    whatever llmpick is serving first. Restart is the same operation on the profile already
    serving.
 
+## Harnesses follow what is serving
+
+A coding harness reaches the model through one fixed name, `llmpick/local`. llmpick owns one
+entry in each harness's own config file (pi's `models.json`, opencode's `opencode.json`) and
+makes it describe the serving profile. There are two writers, each for one event:
+
+- **The server answered.** `serve` writes the entry as its last step, so a switch rewrites it.
+- **The server ended.** Each unit carries `ExecStopPost=llmpick sync`, which systemd runs
+  however the server ends: a stop, a switch or a crash. The hook names the llmpick that started
+  the unit by its real path, so it is lost if that binary or checkout later moves.
+
+`sync` is the one repair path. `llmpick status`, opening the dashboard and `stopAll` run it,
+and it fixes what neither event could: a hook that was skipped (a power cut) or lost (a moved
+llmpick, a unit started by 0.2.0), and a harness installed after the server started. It leaves
+the entry alone while a server runs without answering, so a busy server is not disconnected.
+
+A harness config that cannot be edited never fails a start, a stop or a status. `connect`
+returns such problems as text, `sync` carries them in the snapshot's `problems`, and the front
+ends show them as warnings. A file is refused, and left untouched, when it is not JSON, when
+something other than a table sits on the entry's path, or when the edit does not read back
+(the same key twice).
+
+A harness is data, a `[harnesses.<name>]` block in `profiles.toml`: the folders its config may
+be in, the file names, where the entry sits, the model name, and the entry as a template with
+`{id}`, `{engine}`, `{url}`, `{context}` and `{inputs}`. The code knows no harness. It reads
+the JSON file, fills the template, and edits the file in place with `jsonc-parser`. The file's
+other content and its comments are never changed. Only the entry is laid out, in the file's
+own indentation and line endings, and a file on one line gets the entry on that line. Removing
+the entry also removes each table that held nothing else, judged on the text, so a table with
+a comment in it stays. For an ordinary file, adding and then removing the entry returns it
+byte for byte. The known exceptions are all layout, never content:
+
+- A table that was already there and empty is removed with the entry.
+- A file that llmpick created, or found as `{}`, is left as an empty object over two lines.
+- An entry added to a table that was empty starts on the table's own line.
+- Removing the first key of a table leaves the next key on the line of the opening brace. This
+  needs the user to have added a key after llmpick's entry. The label a harness shows, the fixed name and which harnesses are touched are
+therefore the user's to change without a release, and llmpick edits no file its profiles file
+does not name. A profiles file without harness blocks, such as one written before 0.3.0,
+connects nothing.
+
+The context size and image support in the entry are asked of the server (`GET /v1/models`),
+not recorded in `profiles.toml`. An engine that does not report them gets the harness's
+defaults.
+
+The fixed name is for people and agents who want "the local model". It does not say which
+model answers, and neither does an address, because profiles may share a port. A program that
+needs one particular model checks `status` for the profile's id first. For the same reason
+`connected` can only say that a harness points at the serving address.
+
 ## How a start works
 
 Both front ends follow the same two steps, and both live in `runtime.ts`:
@@ -26,7 +76,7 @@ Both front ends follow the same two steps, and both live in `runtime.ts`:
   answers: `blocked` (engine missing, or files missing with nowhere to fetch them), `download`
   (with the `hf` command to run), or `go` (with the ids that must stop first).
 - `serve(config, profile)` does it: takes a fresh snapshot, stops what is serving, checks the
-  port is free, runs `systemd-run`, then polls the unit and `GET /health` until the server
+  port is free, runs `systemd-run`, then polls the unit and the engine's health path until the server
   answers. It throws with the last log lines if the server exits first.
 
 The command line and the dashboard differ only in how they ask the question that `plan`
@@ -38,12 +88,15 @@ accepted: with one card there is no way to bring up the new one first.
 ## Code
 
 TypeScript run by Bun, in `src/`. Dependencies point one way: `cli` and `tui` use `runtime` and
-`ui`; `ui` uses `runtime`; `runtime` uses `config`.
+`ui`; `ui` uses `runtime`; `runtime` uses `harness` and `config`; `harness` uses `config`; `config`
+and `harness` use `template`.
 
 | File | Owns |
 |---|---|
-| `config.ts` | Finds, reads and validates the profiles file; fills `{port}`, `{dir}` and `{file}` in arguments; finds a profile from search words. |
-| `runtime.ts` | Everything that looks at or changes the machine: `snapshot` (systemd units, health, GPU, files on disk), `plan`, `serve`, `stopAll`, and the log command. The only file that runs another program or reads the disk for status. |
+| `config.ts` | Finds, reads and validates the profiles file, harness blocks included; fills `{port}`, `{dir}` and `{file}` in arguments; finds a profile from search words. |
+| `runtime.ts` | Everything that looks at or changes the machine: `snapshot` (systemd units, health, GPU, files on disk), `plan`, `serve`, `stopAll`, and the log command. The only file that runs another program or reads the disk for status; harness config files are `harness.ts`'s. |
+| `template.ts` | `{name}` placeholders in config values: `names` lists the ones a template uses, `fill` replaces them. Used for a profile's arguments and a harness's entry; knows nothing about either. |
+| `harness.ts` | Putting an entry into a harness's JSON config file and taking it out: finding the file, filling the template, editing in place. Knows no particular harness, and nothing about systemd. |
 | `ui.ts` | Wording shared by both front ends: a profile's state word, its detail rows, the confirmation question, number formats. It formats a snapshot and looks nothing up itself. |
 | `cli.ts` | Argument parsing and the subcommands; prints text or JSON. Also `init` and `agents`, which write or print files compiled into the executable. |
 | `tui.tsx` | The dashboard, built with Ink (React for terminals). Polls `snapshot` every 2 seconds. |
@@ -53,7 +106,7 @@ A profile's state has one vocabulary (`serving`, `loading`, `available`, `not do
 output, the dashboard and `--json`.
 
 One poll costs three processes (`systemctl show` for all units at once, two `nvidia-smi`
-queries) and one HTTP request per running profile.
+queries), one HTTP request per running profile, and a read of each harness config file.
 
 ## The dashboard
 
@@ -64,13 +117,15 @@ it, serve something else, and occasionally look into one profile.
 - **Serving:** the one thing running: its address, how long it has been up, and where its
   memory is (VRAM, RAM, swap, and files the kernel has cached). Always three lines, so the list
   below does not move when a server starts or stops.
-- **Profiles:** one row each: id, engine, headline speed, and whether it can be started.
+- **Profiles:** one row each: a marker, id, headline speed and engine. The marker says by shape
+  whether it is running (●), can be started (○), cannot yet (·) or crashed (✗); the list has no
+  state word, which is in the details.
 - **Details** of the selected profile (files, folder, speeds, command) are hidden. `i` swaps
   the list for them in the same place, and `i` or `esc` swaps back.
 - **Bottom two lines:** a question, progress or result, then the keys. Every key keeps its
   position; one that does nothing right now is dimmed.
 
-Every line puts what matters first (id, then state, then speed, then engine), so a narrow
+Every line puts what matters first (id, then speed, then engine), so a narrow
 terminal cuts the least important text. The keys wrap onto more lines instead of being cut, and
 the details panel is the one region that gives up rows when the terminal is short.
 
@@ -103,11 +158,16 @@ latest release and checks its SHA-256.
 
 ## Known limits
 
-- The health check is `GET /health` for every engine. An engine that answers elsewhere needs a
-  per-engine setting; none installed needs one yet.
 - If a profile is renamed in `profiles.toml` while it is serving, llmpick no longer sees its
   unit. `systemctl --user list-units 'llmpick-*'` does.
 - A server started outside llmpick is shown only as a process on the GPU, and as an error when
   a profile wants its port.
+- opencode's entry uses its version 2 config format. An opencode 1.x install is written the
+  same entry and will not understand it.
+- When the stop hook does not run (a power cut, or a crash after the llmpick that started the
+  unit was moved or deleted), the harness entries are stale until `llmpick status`, `stop`,
+  the dashboard or a start next runs.
+- Two llmpicks editing one harness file at the same instant, or llmpick and the harness
+  itself, can lose one of the two edits. The next `sync` puts llmpick's entry right.
 - There are no tests. `LLMPICK_CONFIG` points llmpick at another profiles file, which is how to
   try start, switch and crash against a dummy engine without touching the GPU.
