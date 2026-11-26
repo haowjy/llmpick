@@ -11,9 +11,11 @@ serving. It is a thin controller: it starts nothing itself and remembers nothing
    llmpick has no state file: "what is serving" is always asked of systemd, so it cannot go
    stale. The bash version it replaced kept a PID file, which was wrong within hours.
 2. **`~/.config/llmpick/profiles.toml` holds only what cannot be checked.** An engine is a program that serves
-   models; a profile is one thing to serve (engine, model files, port, arguments). Versions,
-   ports and speeds are written there by hand. Whether an engine is installed, files are
-   downloaded or a profile is running is worked out on every run.
+   models; a profile is one thing to serve (engine, model files, port, arguments). Ports and
+   speeds are written there by hand. So is an engine's version, unless the engine has a
+   `version_command`: llmpick then runs that once per launch (`askVersions`, two seconds at
+   most) and shows what it prints, so an engine update needs no edit. Whether an engine is
+   installed, files are downloaded or a profile is running is worked out on every run.
 3. **One profile serves at a time.** The card holds one model, so starting a profile stops
    whatever llmpick is serving first. Restart is the same operation on the profile already
    serving.

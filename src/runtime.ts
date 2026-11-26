@@ -59,6 +59,29 @@ async function run(cmd: string[]): Promise<{ code: number; out: string; err: str
   return { code, out, err };
 }
 
+/**
+ * Asks each engine that has a `version_command` for its version and records the answer, so an
+ * updated engine shows its new version with no edit to the profiles file. An engine whose
+ * command fails, hangs or prints nothing keeps the version typed in the file.
+ */
+export async function askVersions(cfg: Config): Promise<Config> {
+  const engines = [...new Set(cfg.profiles.map((p) => p.engine))];
+  await Promise.all(
+    engines.map(async (e) => {
+      if (!e.versionCommand) return;
+      try {
+        const p = Bun.spawn(e.versionCommand, { stdin: "ignore", stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(2000) });
+        const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+        const said = (out.trim() || err.trim()).split("\n")[0]; // llama.cpp prints its version on stderr
+        if ((await p.exited) === 0 && said) e.version = said;
+      } catch {
+        // the command is not there: the typed version stands
+      }
+    }),
+  );
+  return cfg;
+}
+
 async function systemctl(...args: string[]): Promise<string> {
   const r = await run(["systemctl", "--user", ...args]);
   if (r.code !== 0) throw new Error(`systemctl ${args.join(" ")} failed: ${r.err.trim()}`);

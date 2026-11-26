@@ -7,7 +7,10 @@ import { fill, names } from "./template";
 
 export type Engine = {
   name: string;
+  /** As typed in the profiles file, until `versionCommand` has been asked. */
   version: string;
+  /** A command whose first line of output is the engine's version. */
+  versionCommand?: string[];
   /** A path, or a command found on PATH. */
   bin: string;
   cwd?: string;
@@ -77,7 +80,10 @@ export function loadConfig(): Config {
   const engines = new Map<string, Engine>();
   for (const [id, e] of Object.entries<any>(raw.engines ?? {})) {
     if (typeof e.bin !== "string") bad(`engines.${id}`, "needs `bin`");
-    engines.set(id, { name: e.name ?? id, version: e.version ?? "", bin: e.bin, cwd: e.cwd, requires: e.requires, health: e.health ?? "/health" });
+    const cmd = e.version_command;
+    if (cmd !== undefined && !(Array.isArray(cmd) && cmd.length && cmd.every((x) => typeof x === "string")))
+      bad(`engines.${id}`, "needs `version_command` as a list of strings: a command and its arguments");
+    engines.set(id, { name: e.name ?? id, version: e.version ?? "", versionCommand: cmd, bin: e.bin, cwd: e.cwd, requires: e.requires, health: e.health ?? "/health" });
   }
 
   const profiles: Profile[] = [];

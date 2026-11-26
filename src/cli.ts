@@ -8,7 +8,7 @@ import guide from "../AGENTS.md" with { type: "text" };
 import example from "../profiles.example.toml" with { type: "text" };
 import { version } from "../package.json";
 import { type Profile, UserError, configPath, loadConfig, resolve, search } from "./config";
-import { type ProfileStatus, type Snapshot, attach, endpoint, freeSpace, live, logCommand, plan, serve, snapshot, statusOf, stopAll, sync } from "./runtime";
+import { type ProfileStatus, type Snapshot, askVersions, attach, endpoint, freeSpace, live, logCommand, plan, serve, snapshot, statusOf, stopAll, sync } from "./runtime";
 import { COLUMNS, ago, bold, detail, dim, engineLabel, harnessLine, memoryLine, mib, pad, phase, red, speed, stopQuestion, visible } from "./ui";
 
 const HELP = `llmpick: choose which local model is served, and see and stop what is.
@@ -114,7 +114,7 @@ async function main() {
     writeFileSync(path, example);
     return console.log(`Wrote ${path}\nEdit it to describe your engines and models, then run: llmpick ls`);
   }
-  const cfg = loadConfig();
+  const cfg = await askVersions(loadConfig());
   // Asks only a person: a script or agent that runs a command means it.
   const confirm = (question: string) => flags.yes || !tty || /^y(es)?$/i.test((prompt(`${question} [y/N]`) ?? "").trim());
 

@@ -11,6 +11,11 @@
 #   [engines.<id>]
 #   name = "..."       shown in lists
 #   version = "..."    shown in lists; kept current by hand
+#   version_command = [...]   optional: a command and its arguments whose first
+#                      line of output is the version. llmpick runs it and shows
+#                      that, so an engine update needs no edit here. If it
+#                      fails, prints nothing or takes over 2 seconds, `version`
+#                      is shown. Example: ["my-engine", "--version"]
 #   bin = "..."        a command on PATH, or a full path
 #   cwd = "..."        optional: directory to run from
 #   requires = "..."   optional: a path that must exist for the engine to count
