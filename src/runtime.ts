@@ -272,16 +272,17 @@ export async function serve(cfg: Config, p: Profile, onStage: (stage: string, de
     ...(p.engine.cwd ? [`--working-directory=${p.engine.cwd}`] : []),
     "--", s.bin!, ...p.args,
   ]);
-  if (started.code !== 0) throw new Error(`systemd would not start ${p.id}: ${started.err.trim()}`);
+  if (started.code !== 0) throw new UserError(`systemd would not start ${p.id}: ${started.err.trim()}`);
 
   for (let seconds = 0; ; seconds++) {
     const u = (await units([p.id])).get(p.id)!;
     if (u.state === "failed" || u.state === "stopped")
-      throw new Error(`${p.id} exited while starting${u.exitCode !== null ? ` (exit ${u.exitCode})` : ""}. Last output:\n${await logTail(p.id, 15)}`);
+      // The first line has to stand alone: the dashboard shows only that one.
+      throw new UserError(`${p.id} exited while starting${u.exitCode !== null ? ` (exit ${u.exitCode})` : ""}. See: llmpick logs ${p.id}\nLast output:\n${await logTail(p.id, 15)}`);
     const ready = (await healthy(p)) && (await served(p));
     if (ready) return connect(cfg.harnesses, ready).problems;
     if (seconds > READY_TIMEOUT_SECONDS)
-      throw new Error(`${p.id} is running but has not answered ${p.engine.health} after ${READY_TIMEOUT_SECONDS}s. See: llmpick logs ${p.id}`);
+      throw new UserError(`${p.id} is running but has not answered ${p.engine.health} after ${READY_TIMEOUT_SECONDS}s. See: llmpick logs ${p.id}`);
     onStage(`loading ${p.id}`, `${seconds}s  ${(await logTail(p.id, 1)).slice(0, 200)}`);
     await Bun.sleep(1000);
   }

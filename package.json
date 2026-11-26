@@ -1,7 +1,7 @@
 {
   "name": "llmpick",
   "description": "Choose which local model is served, and see and stop what is.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "private": true,
   "type": "module",
